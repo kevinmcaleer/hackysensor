@@ -1,24 +1,27 @@
-import time
+from time import sleep
 import dht
-import machine
+from machine import Pin, WDT
 import network
-from umqtt.simple import MQTTClient
-from secrets import WIFI_SSID, WIFI_PASSWORD
+from simple import MQTTClient
+from wifi_config import WIFI_SSID, WIFI_PASSWORD
 
 
 # Configuration
 
-DHT_PIN = 2  # GPIO2 for DHT sensor (D4 on ESP8266)
+DHT_PIN = 0  # GPIO2 for DHT sensor (D4 on ESP8266)
 MQTT_SERVER = "192.168.1.152"  # Replace with your MQTT broker address
 MQTT_PORT = 1883
 MQTT_TOPIC = "/home/sensor/outdoor"
 CLIENT_ID = "RobotLab"
+led = Pin("LED", Pin.OUT)
+
+OFFSET = 0 # offset the temp by this many degrees
 
 # Watchdog timer setup (10-second timeout)
-wdt = machine.WDT(timeout=10000)  # Reset if the loop freezes for 10 seconds
+wdt = WDT(timeout=8000)  # Reset if the loop freezes for 5 seconds
 
 # Initialize DHT sensor
-dht_sensor = dht.DHT22(machine.Pin(DHT_PIN))
+dht_sensor = dht.DHT22(Pin(DHT_PIN))
 
 # Global MQTT client
 client = None
@@ -31,7 +34,8 @@ def connect_wifi():
         print("Connecting to Wi-Fi...")
         wlan.connect(WIFI_SSID, WIFI_PASSWORD)
         while not wlan.isconnected():
-            time.sleep(1)
+            wdt.feed()
+            sleep(0.5)
             print("Waiting for Wi-Fi connection...")
     print("Connected to Wi-Fi:", wlan.ifconfig())
 
@@ -44,7 +48,9 @@ def connect_mqtt():
         print("Connected to MQTT Broker")
     except OSError as e:
         print(f"Failed to connect to MQTT broker: {e}")
-        time.sleep(5)
+        for _ in range(10): # wait for 5 seconds
+            wdt.feed()
+            sleep(0.5)
         machine.reset()  # Force reset to recover
 
 # Publish data to MQTT broker
@@ -52,10 +58,15 @@ def publish_data(temp, hum):
     global client
     payload = '{"temperature": %.2f, "humidity": %.2f}' % (temp, hum)
     try:
+        led.value(0)
+        wdt.feed()
+        sleep(0.5)
         client.publish(MQTT_TOPIC, payload)
         print(f"Data sent: {payload}")
+        led.value(1)
     except OSError as e:
         print(f"Failed to publish data: {e}")
+        led.value(1)
         reconnect_mqtt()
 
 # Reconnect to MQTT broker
@@ -78,7 +89,7 @@ try:
         try:
             # Read DHT sensor data
             dht_sensor.measure()
-            temperature = dht_sensor.temperature()
+            temperature = dht_sensor.temperature() - OFFSET
             humidity = dht_sensor.humidity()
             print(f"Temperature: {temperature}°C, Humidity: {humidity}%")
             
@@ -88,7 +99,10 @@ try:
             print(f"Failed to read sensor or publish data: {e}")
         
         # Wait before the next cycle
-        time.sleep(10)
+        wdt.feed()  # Reset the watchdog timer
+        sleep(1)
+        wdt.feed()  # Reset the watchdog timer
+        sleep(1)
 
 except KeyboardInterrupt:
     print("Program stopped manually")
